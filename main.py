@@ -1,7 +1,5 @@
-import pandas as pd
+from src.ETL.ETL_main.etl_main import YouTubeTranscriptWriter
 
-
-df = pd.read_excel("./src/Data/Raw_Data_Links.xlsx", sheet_name="CSJ")
-df.fillna("", inplace=True)
-my_dict = df.to_dict(orient="index")
-my_dict
+if __name__ == "__main__":
+    ytw = YouTubeTranscriptWriter()
+    ytw.run()

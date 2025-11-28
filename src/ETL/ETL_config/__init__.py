@@ -8,9 +8,21 @@ from src.ETL.ETL_constants import RawData
 
 
 class MetadataConfig:
-    def __init__(self, source: Literal["CSJ", "RP"] = "CSJ"):
-        sheet = RawData.SHEET_NAME_CSJ if source == "CSJ" else RawData.SHEET_NAME_RP
-        self.df = pd.read_excel(io=RawData.EXCEL_PATH, sheet_name=sheet)
+    def __init__(self):
+        self.df_csj = pd.read_excel(
+            io=RawData.EXCEL_PATH,
+            sheet_name=RawData.SHEET_NAME_CSJ,
+        )
+        self.df_csj.dropna(axis=0, inplace=True)
+        self.df_rp = pd.read_excel(
+            io=RawData.EXCEL_PATH,
+            sheet_name=RawData.SHEET_NAME_RP,
+        )
+        self.df_rp.dropna(axis=0, inplace=True)
+
+        self.df_full = pd.concat([self.df_csj, self.df_rp], axis=0)
+        self.raw_csj_free_path = RawData.RAW_CSJ_FREE
+        self.raw_rp_free_path = RawData.RAW_RP_FREE
 
 
 class ProxyConfig:
@@ -30,8 +42,6 @@ class ProxyConfig:
             )
 
         elif provider == "Other":
-            ot_username = os.getenv("OTHER_USERNAME", "")
-            ot_password = os.getenv("OTHER_PASSWORD", "")
             self.proxy_config = GenericProxyConfig(
                 https_url="",
                 # http_url="",

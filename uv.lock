@@ -1448,7 +1448,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pydantic" },
     { name = "python-dotenv" },
-    { name = "pytube" },
+    { name = "pytube2" },
     { name = "youtube-transcript-api" },
 ]
 
@@ -1462,7 +1462,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
-    { name = "pytube", specifier = ">=15.0.0" },
+    { name = "pytube2", specifier = ">=15.0.16" },
     { name = "youtube-transcript-api", specifier = ">=1.2.3" },
 ]
 
@@ -1898,12 +1898,12 @@ wheels = [
 ]
 
 [[package]]
-name = "pytube"
-version = "15.0.0"
+name = "pytube2"
+version = "15.0.16"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d8/e7/16fec46c8d255c4bbc4b185d89c91dc92cdb802836570d8004d0db169c91/pytube-15.0.0.tar.gz", hash = "sha256:076052efe76f390dfa24b1194ff821d4e86c17d41cb5562f3a276a8bcbfc9d1d", size = 67229 }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/7a/994aed239eff6c81f5aa66fa3473a3b3c111aecadc96a757f01d4a45d962/pytube2-15.0.16.tar.gz", hash = "sha256:27522e854febb731835a56a687bc4ddf430fe31203ccbdecaeb5bbf7ed5e07f7", size = 73287 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/51/64/bcf8632ed2b7a36bbf84a0544885ffa1d0b4bcf25cc0903dba66ec5fdad9/pytube-15.0.0-py3-none-any.whl", hash = "sha256:07b9904749e213485780d7eb606e5e5b8e4341aa4dccf699160876da00e12d78", size = 57594 },
+    { url = "https://files.pythonhosted.org/packages/b8/09/e514891401d22af5e26c1fa6f7c2b9981b9a9c8b8d9f248ee07b5033025e/pytube2-15.0.16-py3-none-any.whl", hash = "sha256:f0647047a81b1fd8f46c69a7971278e7f65ff79da50d34ebc251c74ba937714c", size = 62683 },
 ]
 
 [[package]]

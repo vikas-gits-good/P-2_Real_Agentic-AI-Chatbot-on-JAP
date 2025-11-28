@@ -1,4 +1,4 @@
-# basic
+# wrangle
 pandas
 numpy
 
@@ -6,10 +6,10 @@ numpy
 python-dotenv
 
 # etl
+pytube2
 openpyxl
-youtube_transcript_api
-pytube
 crawl4ai
+youtube_transcript_api
 
 # notebook
 ipykernel
@@ -17,5 +17,5 @@ ipykernel
 # validation
 pydantic
 
-# api
+# web framework
 fastapi
