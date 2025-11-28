@@ -1,0 +1,18 @@
+[project]
+name = "p-2-real-agentic-ai-chatbot-on-jap"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "crawl4ai>=0.7.7",
+    "fastapi>=0.122.0",
+    "ipykernel>=7.1.0",
+    "numpy>=2.3.5",
+    "openpyxl>=3.1.5",
+    "pandas>=2.3.3",
+    "pydantic>=2.12.5",
+    "python-dotenv>=1.2.1",
+    "pytube>=15.0.0",
+    "youtube-transcript-api>=1.2.3",
+]

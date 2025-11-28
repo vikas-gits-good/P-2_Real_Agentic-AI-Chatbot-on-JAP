@@ -1,0 +1,21 @@
+# basic
+pandas
+numpy
+
+# secrets
+python-dotenv
+
+# etl
+openpyxl
+youtube_transcript_api
+pytube
+crawl4ai
+
+# notebook
+ipykernel
+
+# validation
+pydantic
+
+# api
+fastapi
