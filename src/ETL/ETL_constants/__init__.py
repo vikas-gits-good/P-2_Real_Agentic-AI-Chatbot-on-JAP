@@ -42,28 +42,23 @@ class BlogJSONSchema:
                     },
                 ],
             },
-            {
-                "name": "pagination_link",
-                "selector": "div.pagination div.alignleft a",
-                "type": "attribute",
-                "attribute": "href",
-                "default": "",
-            },
         ],
     }
+
     SCHEMA_CSJ_BLOG_PAGE = {
         "name": "Transcript schema via CSS",
         "baseSelector": "#et-main-area > #main-content",
         "fields": [
-            {
-                "name": "video_name",
-                "selector": "div.et_post_meta_wrapper > h1.entry-title",
-                "type": "text",
-            },
+            # {
+            #     "name": "video_name",
+            #     "selector": "div.et_post_meta_wrapper > h1.entry-title",
+            #     "type": "text",
+            # },
             {
                 "name": "transcript",
                 "selector": "div.et_pb_section.et_pb_section_1 > div.et_pb_row.et_pb_row_1 > div.et_pb_column.et_pb_column_4_4",
                 "type": "text",
+                "default": "",
             },
         ],
     }
