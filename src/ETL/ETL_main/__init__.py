@@ -1,20 +1,20 @@
 import os
 import json
 import textwrap
-from typing import Literal, List
+import pandas as pd
+from typing import Literal
 from crawl4ai import AsyncWebCrawler
 from crawl4ai.models import CrawlResultContainer
 from pytube import Playlist, YouTube
 from youtube_transcript_api import YouTubeTranscriptApi
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.ETL.ETL_utils import check_duplicates
+from src.ETL.ETL_utils import check_duplicate_videos, check_duplicate_blogs
 from src.ETL.ETL_constants import RawData
 from src.ETL.ETL_config import (
     MetadataConfig,
     ProxyConfig,
     CSJWebScrapeConfig,
-    RPWebScrapeConfig,
 )
 
 from src.Logging.logger import log_etl
@@ -31,7 +31,7 @@ class YouTubeTranscriptWriter:
     ) -> None:
         self.proxy_config = proxy_rotation_config.proxy_config
         self.df_full = metadata.df_full
-        self.full_files = check_duplicates(data=self.df_full)
+        self.full_files = check_duplicate_videos(data=self.df_full)
 
     def _process_video(self, i, j, video_url, save_folder):
         try:
@@ -104,103 +104,57 @@ class BlogTranscriptWriter:
 
     def __init__(
         self,
-        # content: Literal["Video", "Article"] = "Video",
         method: Literal["series", "parallel"] = "series",
     ) -> None:
-        # self.content = content
         self.method = method
-        self.data = MetadataConfig(source="blog").df_full
-        self.urls = self.data["URL"].to_list()
-        self.crw_csj_config = CSJWebScrapeConfig(
-            max_parallel=5,
-            len_list=len(self.urls),
-        )
-        self.crw_rp_config = RPWebScrapeConfig(
-            max_parallel=5,
-            len_list=len(self.urls),
-        )
-
-    async def _process_blog_videos(
-        self,
-        urls: List[str],
-        run_config: CSJWebScrapeConfig,
-    ):
-        data = {
-            "base_url": urls,
-            "video_name": [[] for _ in urls],
-            "video_link": [[] for _ in urls],
-        }
-        async with AsyncWebCrawler(config=run_config.browser_config) as crawler:
-            try:
-                if self.method == "series":
-                    # scrape
-                    results = [
-                        await crawler.arun(
-                            url=url,
-                            config=run_config.run_config_init_bsf,
-                        )
-                        for url in urls
-                    ]
-                    # flatten `results`
-                    temp_data = [
-                        item2._results[0] for item1 in results for item2 in item1
-                    ]
-                    flat_rslt = CrawlResultContainer(temp_data)
-                    # extract `results`
-                    for idx, url in enumerate(urls):
-                        for result in flat_rslt:
-                            if url in result.url:
-                                for video in json.loads(result.extracted_content)[0][
-                                    "articles"
-                                ]:
-                                    data["video_name"][idx].append(video["video_name"])
-                                    data["video_link"][idx].append(video["video_link"])
-
-                    return data
-
-                elif self.method == "parallel":  # Method not working. Don't call this
-                    # scrape                    # bug in crawl4ai. check ["https://github.com/unclecode/crawl4ai/issues/1277"]
-                    results = await crawler.arun_many(
-                        urls=urls,
-                        config=run_config.run_config_init_bsf,
-                        dispatcher=run_config.mem_ada_dispatcher,  # <- issues
-                    )
-                    return {}
-
-            except Exception as e:
-                LogException(e, "Extract", log_etl)
-                # return {}
-                raise CustomException(e)
 
     async def _scrape_transcripts(
         self,
         data: dict,
         run_config: CSJWebScrapeConfig,
     ):
-        data["video_transcript"] = [[] for _ in data["base_url"]]
+        data["video_transcript"] = [
+            [""] * len(sublist) for sublist in data["video_name"]
+        ]
+        """data = {
+              'base_url': ['url-1','','url-3','','url-5'],
+            'video_name': [['','url-1_vids-2', ''],[],['url-3_vids-1','',''],[],['','','url-5_vids-3']],
+            'video_link': [['','url-1_link-2', ''],[],['url-3_link-1','',''],[],['','','url-5_link-3']],
+      'video_transcript': [['','', ''],[],['','',''],[],['','','']],
+        }            
+        """
         async with AsyncWebCrawler(config=run_config.browser_config) as crawler:
             try:
-                for idx, urls in enumerate(data["video_link"]):
-                    # get data
-                    results = await crawler.arun_many(
-                        urls=urls,
-                        config=run_config.run_config_tran,
-                        dispatcher=run_config.mem_ada_dispatcher,
-                    )
+                for i, url_list in enumerate(data["video_link"]):
+                    if len(url_list) > 0:  # skip empty list
+                        urls = [s for s in url_list if s]
+                        # get data
+                        results = await crawler.arun_many(
+                            urls=urls,
+                            config=run_config.run_config_tran,
+                            dispatcher=run_config.mem_ada_dispatcher,
+                        )
 
-                    # flatten `results`
-                    temp_data = [item1._results[0] for item1 in results]
-                    results = CrawlResultContainer(temp_data)
+                        # flatten `results`
+                        temp_data = [item1._results[0] for item1 in results]
+                        results = CrawlResultContainer(temp_data)
 
-                    # reorder data
-                    results_ordr = [
-                        next(r for r in results if r.url == url) for url in urls
-                    ]
+                        # reorder data
+                        results_ordr = [
+                            next(r for r in results if r.url == url) for url in urls
+                        ]
 
-                    # append data
-                    for result in results_ordr:
-                        for sp_data in json.loads(result.extracted_content):
-                            data["video_transcript"][idx].append(sp_data["transcript"])
+                        # append data
+                        for j, url in enumerate(url_list):
+                            for result in results_ordr:
+                                if url == result.url:
+                                    trsp = json.loads(result.extracted_content)
+                                    trsp = (
+                                        trsp[0]
+                                        if isinstance(trsp, list) and len(trsp) > 0
+                                        else {"transcript": "Transcript not found"}
+                                    )
+                                    data["video_transcript"][i][j] = trsp["transcript"]
 
                 return data
 
@@ -209,24 +163,25 @@ class BlogTranscriptWriter:
                 raise CustomException(e)
 
     def _save(self, i, j, data, video_url, trscps, save_dir):
-        try:
-            file_name = f"{self.data['KEY'][i]}E{j + 1:02d}-{data['video_name'][i][j]} | CS Joseph.txt"
-            log_etl.info(f"Extract: Saving '{file_name}'")
+        try:  # skip saved season               # skip saved video
+            if len(data["video_name"]) > 0 and data["video_name"][i][j]:
+                file_name = f"{self.data['KEY'][i]}E{j + 1:02d}-{data['video_name'][i][j]} | CS Joseph.txt"
+                log_etl.info(f"Extract: Saving '{file_name}'")
 
-            # make save folder
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir, exist_ok=True)
+                # make save folder
+                if not os.path.exists(save_dir):
+                    os.makedirs(save_dir, exist_ok=True)
 
-            # write data
-            file_path = os.path.join(save_dir, file_name)
+                # write data
+                file_path = os.path.join(save_dir, file_name)
 
-            # prep transcript
-            trscps = "\n".join(textwrap.wrap(trscps, width=160))
+                # prep transcript
+                trscps = "\n".join(textwrap.wrap(trscps, width=160))
 
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(f"{file_name[:-4]}\n\n")
-                f.write(f"{video_url}\n\n")
-                f.write(trscps)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(f"{file_name[:-4]}\n\n")
+                    f.write(f"{video_url}\n\n")
+                    f.write(trscps)
 
         except Exception as e:
             LogException(e, "Extract", log_etl)
@@ -262,24 +217,44 @@ class BlogTranscriptWriter:
     async def run(self):
         try:
             log_etl.info("Extract: Blog video transcript scraping started")
-            urls_csj = [url for url in self.urls if "csjoseph.life" in url]
-
-            log_etl.info("Extract: Deep crawling for individual videos per season")
-            data_csj = await self._process_blog_videos(
-                urls=urls_csj,
-                run_config=self.crw_csj_config,
+            self.data: pd.DataFrame = MetadataConfig(source="blog").df_full
+            data_csj: dict = await check_duplicate_blogs(data=self.data)
+            """data_csj = {
+                'base_url'  : ['url-1','','url-3','','url-5'],
+                'video_name': [['','url-1_vids-2', ''],[],['url-3_vids-1','',''],[],['','','url-5_vids-3']],
+                'video_link': [['','url-1_link-2', ''],[],['url-3_link-1','',''],[],['','','url-5_link-3']],
+            }
+            """
+            num_sesn = len([item for item in data_csj["base_url"] if item])
+            num_vids = len(
+                [
+                    item
+                    for url_list in data_csj["video_link"]
+                    for item in url_list
+                    if item
+                ]
             )
 
-            log_etl.info("Extract: Scraping transcripts from blog")
-            trnc_csj = await self._scrape_transcripts(
-                data=data_csj,
-                run_config=self.crw_csj_config,
-            )
+            if not all(item == "" for item in data_csj["base_url"]):
+                log_etl.info(
+                    f"Extract: Scraping: {num_vids:03d} transcripts from {num_sesn:02d} seasons"
+                )
+                crw_csj_config = CSJWebScrapeConfig(
+                    max_parallel=5, len_list=len(data_csj["base_url"])
+                )
+                trnc_csj = await self._scrape_transcripts(
+                    data=data_csj,
+                    run_config=crw_csj_config,
+                )
 
-            log_etl.info("Extract: Saving transcripts to file")
-            self._save_transcripts(data=trnc_csj)
+                log_etl.info("Extract: Saving transcripts to file")
+                self._save_transcripts(data=trnc_csj)
 
-            log_etl.info("Extract: Blog video transcript data was saved")
+                log_etl.info("Extract: Blog video transcript data was saved")
+
+            else:
+                log_etl.info("Extract: No new data to scrape. Stopping")
+
         except Exception as e:
             LogException(e, "Extract", log_etl)
             raise CustomException(e)
