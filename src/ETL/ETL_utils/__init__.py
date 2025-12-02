@@ -1,19 +1,24 @@
 import json
 import pandas as pd
 from glob import glob
+from logging import Logger
+from pytube.helpers import DeferredGeneratorList
 from typing import List, Literal
 from pytube import Playlist, YouTube
 from crawl4ai import AsyncWebCrawler
+from pymongo import MongoClient, UpdateOne
 from crawl4ai.models import CrawlResultContainer
+
 
 from src.ETL.ETL_constants import RawData
 from src.ETL.ETL_config import CSJWebScrapeConfig
+from src.Entity.config_entity import MongoDBConfig
 
 from src.Logging.logger import log_etl
 from src.Exception.exception import LogException, CustomException
 
 
-def check_duplicate_videos(data: pd.DataFrame) -> dict:
+def check_duplicate_videos_manually(data: pd.DataFrame) -> dict:
     try:
         log_etl.info("Extract: Checking files to skip downloading")
         # text files that are present locally
@@ -40,6 +45,14 @@ def check_duplicate_videos(data: pd.DataFrame) -> dict:
                 file_name = f"{value['KEY']}E{j + 1:02d}-{video_name}.txt"
                 name_list.append(file_name)
             files_full["vid_name"].append(name_list)
+
+        log_etl.info("Extract: Updating mongodb for future use")
+        # pytube returns DeferredGeneratorList(urls) not list[urls]
+        files_full["vd_url"] = [
+            list(sublist) if isinstance(sublist, DeferredGeneratorList) else sublist
+            for sublist in files_full["vd_url"]
+        ]
+        put_dict_to_MongoDB(data=files_full, collection="JAPRAGYouTube")
 
         # filter out missing files
         for playlist_idx, (videos, titles) in enumerate(
@@ -93,7 +106,8 @@ def check_duplicate_videos(data: pd.DataFrame) -> dict:
         files_full["pl_url"] = pl
         files_full["sv_path"] = nm
 
-        log_etl.info(f"Extract: Finalised sources to download:\n{files_full}")
+        log_etl.info("Extract: Finalised sources to download")
+
         return files_full
 
     except Exception as e:
@@ -101,7 +115,7 @@ def check_duplicate_videos(data: pd.DataFrame) -> dict:
         raise CustomException(e)
 
 
-async def check_duplicate_blogs(data: pd.DataFrame) -> dict:
+async def check_duplicate_blogs_manually(data: pd.DataFrame) -> dict:
     try:
         log_etl.info("Extract: Checking files to skip downloading")
         files_csj = glob(f"{RawData.RAW_CSJ_BLOG}/**/*.txt")
@@ -112,6 +126,8 @@ async def check_duplicate_blogs(data: pd.DataFrame) -> dict:
         urls_csj = [url for url in urls if "csjoseph.life" in url]
 
         data_to_scrape = await process_blog_videos(urls_csj)
+        log_etl.info("Extract: Updating mongodb for future use")
+        put_dict_to_MongoDB(data=data_to_scrape, collection="JAPRAGBlog")
 
         to_remove_outer = []
         for i in range(len(data_to_scrape["base_url"])):
@@ -135,6 +151,8 @@ async def check_duplicate_blogs(data: pd.DataFrame) -> dict:
             data_to_scrape["base_url"][i] = ""
             data_to_scrape["video_name"][i] = []
             data_to_scrape["video_link"][i] = []
+
+        log_etl.info("Extract: Finalised sources to download")
 
         return data_to_scrape
 
@@ -192,3 +210,163 @@ async def process_blog_videos(
             LogException(e, "Extract", log_etl)
             # return {}
             raise CustomException(e)
+
+
+def get_dict_from_MongoDB(
+    collection: Literal["JAPRAGYouTube", "JAPRAGBlog"] = "JAPRAGYouTube",
+    db_config: MongoDBConfig = MongoDBConfig(),
+    log: Logger = log_etl,
+    prefix: Literal["Extract", "Load"] = "Extract",
+):
+    try:
+        database_name = db_config.database
+        log.info(
+            f"{prefix}: Communicating with MongoDB: '{database_name}/{collection}'"
+        )
+        mongo_client = MongoClient(db_config.mongo_db_url)
+        collections = mongo_client[database_name][collection]
+
+        df = pd.DataFrame(list(collections.find()))
+        df = df.drop(columns=["_id"], inplace=False) if "_id" in df.columns else df
+
+        # convert to dict
+        data_dict = df.to_dict(orient="list")
+        return data_dict
+
+    except Exception as e:
+        log_etl.info(f"Error: {e}")
+        raise CustomException(e)
+
+
+def df_to_json(data: dict) -> json.JSONEncoder:
+    try:
+        df = pd.DataFrame(data)
+        df.reset_index(drop=True, inplace=True)
+        records = df.to_dict("records")
+        return records
+
+    except Exception as e:
+        log_etl.info(f"Error: {e}")
+        raise CustomException(e)
+
+
+def put_dict_to_MongoDB(
+    data: dict,
+    collection: Literal["JAPRAGYouTube", "JAPRAGBlog"] = "JAPRAGYouTube",
+    db_config: MongoDBConfig = MongoDBConfig(),
+    log: Logger = log_etl,
+    prefix: Literal["Load", "Extract"] = "Extract",
+) -> None:
+    try:
+        records = df_to_json(data)
+
+        db_database_name = db_config.database
+        db_collection_name = collection
+        log.info(
+            f"{prefix}: Communicating with MongoDB: '{db_database_name}/{db_collection_name}'"
+        )
+        mongo_client = MongoClient(db_config.mongo_db_url)
+        collections = mongo_client[db_database_name][db_collection_name]
+
+        log.info(f"{prefix}: Preparing data upload/update operations")
+        operations = []
+        col_name = "pl_url" if collection == "JAPRAGYouTube" else "base_url"
+        for record in records:
+            filter_query = {col_name: record.get(col_name)}
+            operations.append(UpdateOne(filter_query, {"$set": record}, upsert=True))
+
+        if operations:
+            log.info(
+                f"{prefix}: Uploading data to '{db_database_name}/{db_collection_name}'"
+            )
+            collections.bulk_write(operations)
+
+    except Exception as e:
+        LogException(e, logger=log)
+        raise CustomException(e)
+
+
+def check_duplicate_videos_database():
+    try:
+        log_etl.info("Extract: Checking files to skip downloading")
+        # text files that are present locally
+        files_csj = glob(f"{RawData.RAW_CSJ_FREE}/**/*.txt")
+        files_rp = glob(f"{RawData.RAW_RP_FREE}/**/*.txt")
+        files_local = files_csj + files_rp
+
+        # call database item
+        db_data = get_dict_from_MongoDB(collection="JAPRAGYouTube")
+        log_etl.info(f"Full Data:\n{db_data}")
+
+        # {"pl_url": [], "sv_path": [], "vd_url": [], "vid_name": []}
+        to_remove_outer = []
+        for i in range(len(db_data["pl_url"])):
+            to_remove_inner = []
+            for j, video_name in enumerate(db_data["vid_name"][i]):
+                for files in files_local:
+                    if video_name in files:
+                        to_remove_inner.append(j)
+
+            for j in sorted(to_remove_inner, reverse=True):
+                db_data["vid_name"][i][j] = ""
+                db_data["vd_url"][i][j] = ""
+
+            if all(item == "" for item in db_data["vid_name"][i]):
+                to_remove_outer.append(i)
+
+        # Clean up outer lists
+        for i in sorted(to_remove_outer, reverse=True):
+            del db_data["pl_url"][i]
+            del db_data["sv_path"][i]
+            del db_data["vid_name"][i]
+            del db_data["vd_url"][i]
+
+        return db_data
+
+    except Exception as e:
+        LogException(e, "Extract", log_etl)
+        raise CustomException(e)
+
+
+def check_duplicate_blogs_database(data: pd.DataFrame):
+    try:
+        log_etl.info("Extract: Checking files to skip downloading")
+        # text files that are present locally
+        files_csj = glob(f"{RawData.RAW_CSJ_BLOG}/**/*.txt")
+        files_rp = glob(f"{RawData.RAW_RP_BLOG}/**/*.txt")
+        files_local = files_csj + files_rp
+
+        # call database item
+        db_data = get_dict_from_MongoDB(collection="JAPRAGBlog")
+
+        log_etl.info(f"Full Data:\n{db_data}")
+
+        to_remove_outer = []
+        for i in range(len(db_data["base_url"])):
+            to_remove_inner = []
+            for j, video_name in enumerate(db_data["video_name"][i]):
+                file_name = f"{data['KEY'][i]}E{j + 1:02d}-{video_name} | CS Joseph.txt"
+                for files in files_local:
+                    # log_etl.info(f"Local: {files} DB: {file_name}")
+                    if file_name in files:
+                        # log_etl.info(f"Extract: Duplicate found: '{file_name}'")
+                        to_remove_inner.append(j)
+
+            for j in sorted(to_remove_inner, reverse=True):
+                db_data["video_name"][i][j] = ""
+                db_data["video_link"][i][j] = ""
+
+            if all(item == "" for item in db_data["video_name"][i]):
+                to_remove_outer.append(i)
+
+        # Clean up outer lists
+        for i in sorted(to_remove_outer, reverse=True):
+            del db_data["base_url"][i]
+            del db_data["video_name"][i]
+            del db_data["video_link"][i]
+
+        return db_data
+
+    except Exception as e:
+        LogException(e, "Extract", log_etl)
+        raise CustomException(e)

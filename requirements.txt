@@ -11,6 +11,9 @@ openpyxl
 crawl4ai
 youtube_transcript_api
 
+# databases
+pymongo
+
 # notebook
 ipykernel
 

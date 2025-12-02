@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import textwrap
 import pandas as pd
 from typing import Literal
@@ -9,7 +10,12 @@ from pytube import Playlist, YouTube
 from youtube_transcript_api import YouTubeTranscriptApi
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.ETL.ETL_utils import check_duplicate_videos, check_duplicate_blogs
+from src.ETL.ETL_utils import (
+    check_duplicate_videos_manually,
+    check_duplicate_blogs_manually,
+    check_duplicate_videos_database,
+    check_duplicate_blogs_database,
+)
 from src.ETL.ETL_constants import RawData
 from src.ETL.ETL_config import (
     MetadataConfig,
@@ -27,40 +33,48 @@ class YouTubeTranscriptWriter:
     def __init__(
         self,
         metadata: MetadataConfig = MetadataConfig(source="video"),
-        proxy_rotation_config: ProxyConfig = ProxyConfig(provider="WebShare"),
+        proxy_rotation_config: ProxyConfig = ProxyConfig(),
+        duplicate_search: Literal["database", "manual"] = "database",
     ) -> None:
         self.proxy_config = proxy_rotation_config.proxy_config
         self.df_full = metadata.df_full
-        self.full_files = check_duplicate_videos(data=self.df_full)
+        self.part_files = (
+            check_duplicate_videos_manually(data=self.df_full)
+            if duplicate_search == "manual"
+            else check_duplicate_videos_database()
+        )
 
     def _process_video(self, i, j, video_url, save_folder):
         try:
             # get video details
             yt = YouTube(video_url)
-            file_name = self.full_files["vid_name"][i][j]
-            log_etl.info(f"Extract: Processing {file_name}")
+            file_name = self.part_files["vid_name"][i][j]
+            if file_name:
+                log_etl.info(f"Extract: Processing {file_name}")
 
-            # get video transcript
-            yt_ts_api = YouTubeTranscriptApi(proxy_config=self.proxy_config)
-            transcript_list = yt_ts_api.list(yt.video_id)
-            transcript = transcript_list.find_transcript(["en"])
-            video_transcript = transcript.fetch()
-            transcript_text = " ".join([snippet.text for snippet in video_transcript])
-            transcript_text = "\n".join(textwrap.wrap(transcript_text, width=160))
+                # get video transcript
+                yt_ts_api = YouTubeTranscriptApi(proxy_config=self.proxy_config)
+                transcript_list = yt_ts_api.list(yt.video_id)
+                transcript = transcript_list.find_transcript(["en"])
+                video_transcript = transcript.fetch()
+                transcript_text = " ".join(
+                    [snippet.text for snippet in video_transcript]
+                )
+                transcript_text = "\n".join(textwrap.wrap(transcript_text, width=160))
 
-            # make save folder
-            if not os.path.exists(save_folder):
-                os.makedirs(save_folder, exist_ok=True)
+                # make save folder
+                if not os.path.exists(save_folder):
+                    os.makedirs(save_folder, exist_ok=True)
 
-            # write data
-            file_path = os.path.join(save_folder, file_name)
+                # write data
+                file_path = os.path.join(save_folder, file_name)
 
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(f"{file_name[:-4]}\n\n")
-                f.write(f"{video_url}\n\n")
-                f.write(transcript_text)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(f"{file_name[:-4]}\n\n")
+                    f.write(f"{video_url}\n\n")
+                    f.write(transcript_text)
 
-            log_etl.info(f"Extract: Saving {file_name}")
+                log_etl.info(f"Extract: Saving {file_name}")
 
         except Exception as e:
             LogException(e, "Extract", log_etl)
@@ -68,31 +82,49 @@ class YouTubeTranscriptWriter:
 
     def run(self):
         try:
-            log_etl.info(
-                f"Extract: Processing {len(self.full_files['pl_url'])} seasons in total"
+            num_sesn = len([item for item in self.part_files["pl_url"] if item])
+            num_vids = len(
+                [
+                    item
+                    for url_list in self.part_files["vd_url"]
+                    for item in url_list
+                    if item
+                ]
             )
-            for i in range(len(self.full_files["pl_url"])):
-                pl = Playlist(self.full_files["pl_url"][i])
-                vl = pl.video_urls
-
+            log_etl.info("Extract: Blog video transcript scraping started")
+            log_etl.info(f"Filt Data:\n{self.part_files}")
+            if not all(item == "" for item in self.part_files["pl_url"]):
                 log_etl.info(
-                    f"Extract: Parallel processing '{self.full_files['sv_path'][i]}'"
+                    f"Extract: Scraping: {num_vids:03d} transcripts from {num_sesn:02d} seasons"
                 )
-                save_dir = f"{RawData.RAW_CSJ_FREE}/{self.full_files['sv_path'][i]}/"
 
-                # Process videos in parallel with max 10 threads
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    futures = []
-                    for j, video_url in enumerate(vl):
-                        futures.append(
-                            executor.submit(
-                                self._process_video, i, j, video_url, save_dir
+                for i in range(len(self.part_files["pl_url"])):
+                    pl = Playlist(self.part_files["pl_url"][i])
+                    vl = pl.video_urls
+
+                    log_etl.info(
+                        f"Extract: Parallel processing '{self.part_files['sv_path'][i]}'"
+                    )
+                    save_dir = (
+                        f"{RawData.RAW_CSJ_FREE}/{self.part_files['sv_path'][i]}/"
+                    )
+
+                    # Process videos in parallel with max 10 threads
+                    with ThreadPoolExecutor(max_workers=10) as executor:
+                        futures = []
+                        for j, video_url in enumerate(vl):
+                            futures.append(
+                                executor.submit(
+                                    self._process_video, i, j, video_url, save_dir
+                                )
                             )
-                        )
 
-                    # Wait for all futures to complete
-                    for future in as_completed(futures):
-                        pass
+                        # Wait for all futures to complete
+                        for future in as_completed(futures):
+                            pass
+
+            else:
+                log_etl.info("Extract: No new data to scrape. Stopping")
 
         except Exception as e:
             LogException(e, "Extract", log_etl)
@@ -105,8 +137,15 @@ class BlogTranscriptWriter:
     def __init__(
         self,
         method: Literal["series", "parallel"] = "series",
+        duplicate_search: Literal["database", "manual"] = "database",
     ) -> None:
         self.method = method
+        self.data: pd.DataFrame = MetadataConfig(source="blog").df_full
+        self.data_csj = (
+            asyncio.run(check_duplicate_blogs_manually(data=self.data))
+            if duplicate_search == "manual"
+            else check_duplicate_blogs_database(data=self.data)
+        )
 
     async def _scrape_transcripts(
         self,
@@ -166,6 +205,7 @@ class BlogTranscriptWriter:
         try:  # skip saved season               # skip saved video
             if len(data["video_name"]) > 0 and data["video_name"][i][j]:
                 file_name = f"{self.data['KEY'][i]}E{j + 1:02d}-{data['video_name'][i][j]} | CS Joseph.txt"
+                file_name = file_name.replace("/", "&")
                 log_etl.info(f"Extract: Saving '{file_name}'")
 
                 # make save folder
@@ -189,7 +229,7 @@ class BlogTranscriptWriter:
 
     def _save_transcripts(self, data: dict):
         try:
-            for i in range(len(self.data["URL"])):
+            for i in range(len(data["base_url"])):
                 save_dir = f"{RawData.RAW_CSJ_BLOG}/{self.data['NAME'][i]}/"
                 video_list = data["video_link"][i]
                 trscp_list = data["video_transcript"][i]
@@ -216,34 +256,32 @@ class BlogTranscriptWriter:
 
     async def run(self):
         try:
-            log_etl.info("Extract: Blog video transcript scraping started")
-            self.data: pd.DataFrame = MetadataConfig(source="blog").df_full
-            data_csj: dict = await check_duplicate_blogs(data=self.data)
             """data_csj = {
                 'base_url'  : ['url-1','','url-3','','url-5'],
                 'video_name': [['','url-1_vids-2', ''],[],['url-3_vids-1','',''],[],['','','url-5_vids-3']],
                 'video_link': [['','url-1_link-2', ''],[],['url-3_link-1','',''],[],['','','url-5_link-3']],
             }
             """
-            num_sesn = len([item for item in data_csj["base_url"] if item])
+            num_sesn = len([item for item in self.data_csj["base_url"] if item])
             num_vids = len(
                 [
                     item
-                    for url_list in data_csj["video_link"]
+                    for url_list in self.data_csj["video_link"]
                     for item in url_list
                     if item
                 ]
             )
-
-            if not all(item == "" for item in data_csj["base_url"]):
+            log_etl.info("Extract: Blog video transcript scraping started")
+            log_etl.info(f"Filt Data:\n{self.data_csj}")
+            if not all(item == "" for item in self.data_csj["base_url"]):
                 log_etl.info(
                     f"Extract: Scraping: {num_vids:03d} transcripts from {num_sesn:02d} seasons"
                 )
                 crw_csj_config = CSJWebScrapeConfig(
-                    max_parallel=5, len_list=len(data_csj["base_url"])
+                    max_parallel=5, len_list=len(self.data_csj["base_url"])
                 )
                 trnc_csj = await self._scrape_transcripts(
-                    data=data_csj,
+                    data=self.data_csj,
                     run_config=crw_csj_config,
                 )
 
